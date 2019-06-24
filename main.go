@@ -1,16 +1,21 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
+	"github.com/skip2/go-qrcode"
 	"math"
 	"os"
 	"strconv"
-	"encoding/base64"
-	"github.com/skip2/go-qrcode"
 )
 
 const FileChunkSize = 1024
 const TmpFilePath = "./out" //
+
+type FileBlock struct {
+	content  string
+	filePath string
+}
 
 func PathExists(path string) (bool, error) {
 	_, err := os.Stat(path)
@@ -22,11 +27,11 @@ func PathExists(path string) (bool, error) {
 	}
 	return false, err
 }
-func CleanTmpFolder(){
+func CleanTmpFolder() {
 	os.RemoveAll(TmpFilePath)
 }
 
-func NewTmpFolder(folderPath string){
+func NewTmpFolder(folderPath string) {
 	exist, err := PathExists(folderPath)
 	if err != nil {
 		fmt.Printf("get dir error![%v]\n", err)
@@ -46,8 +51,10 @@ func NewTmpFolder(folderPath string){
 	}
 }
 
+func SplitFile(fileToBeChunked string) {
+	genQRchan := make(chan *FileBlock)
+	done := make(chan bool)
 
-func SplitFile(fileToBeChunked string){
 	file, err := os.Open(fileToBeChunked)
 
 	if err != nil {
@@ -59,46 +66,65 @@ func SplitFile(fileToBeChunked string){
 
 	fileInfo, _ := file.Stat()
 
-	var fileSize int64 = fileInfo.Size()
+	var fileSize = fileInfo.Size()
 
-
-	fmt.Print(FileChunkSize)
+	fmt.Printf("File size: %d\n", fileSize)
 
 	totalPartsNum := uint64(math.Ceil(float64(fileSize) / float64(FileChunkSize)))
 
 	fmt.Printf("Splitting to %d pieces.\n", totalPartsNum)
 
-	for i := uint64(1); i < totalPartsNum; i++ {
+	for i := uint64(1); i <= totalPartsNum; i++ {
 
-		partSize := int(math.Min(FileChunkSize, float64(fileSize-int64(i*FileChunkSize))))
+		go GenerateQRCode(genQRchan, done)
+
+		partSize := int(math.Min(FileChunkSize, float64(fileSize-int64((i-1)*FileChunkSize))))
+
 		partBuffer := make([]byte, partSize)
 
 		file.Read(partBuffer)
 
 		fileName := "file_" + strconv.FormatUint(i, 10)
 		filePath := TmpFilePath + "/" + fileName + ".png"
-		_, err := os.Create(filePath)
-
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
 
 		// base64
-		encodeString := base64.StdEncoding.EncodeToString(partBuffer)
+		fileBlock := &FileBlock{
+			content:  base64.StdEncoding.EncodeToString(partBuffer),
+			filePath: filePath,
+		}
 
-		fmt.Println(encodeString)
-
-		qrcode.WriteFile(encodeString,qrcode.Low,1024, filePath)
-
-		fmt.Println("Split to : ", fileName)
+		genQRchan <- fileBlock
 	}
+	for i := uint64(1); i <= totalPartsNum; i++ {
+		<-done
+	}
+
 }
 
+func GenerateQRCode(c chan *FileBlock, done chan bool) {
+	fileBlock := <-c
+	fileContent := fileBlock.content
+	filePath := fileBlock.filePath
+	_, err := os.Create(filePath)
+
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println("Path: ", filePath, "Base64: ", fileContent)
+
+	err = qrcode.WriteFile(fileContent, qrcode.Low, len(fileContent), filePath)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	done <- true
+
+}
 
 func main() {
 	CleanTmpFolder()
 	NewTmpFolder(TmpFilePath)
-	SplitFile("./a.txt")
+	SplitFile("./1.zip")
 
 }
